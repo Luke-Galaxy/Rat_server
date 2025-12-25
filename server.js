@@ -1,3 +1,8 @@
+process.on('unhandledRejection', (reason, promise) => {
+  console.log('Error no manejado en:', promise, 'razón:', reason);
+});
+
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
