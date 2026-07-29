@@ -6,7 +6,7 @@ const multer = require('multer');
 
 // Variables de configuración al inicio
 const TOKEN = "6536556404:AAHyLzv3YhbhErSGIydCdnXhw-1iRH8-mhY";
-const OWNER_ID = "";
+const OWNER_ID = "5892259786";
 
 const app = express();
 const server = http.createServer(app);
