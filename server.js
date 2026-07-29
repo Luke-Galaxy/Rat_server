@@ -5,7 +5,7 @@ const { Telegraf } = require('telegraf');
 const multer = require('multer');
 
 // Variables de configuración al inicio
-const TOKEN = "";
+const TOKEN = "6536556404:AAHyLzv3YhbhErSGIydCdnXhw-1iRH8-mhY";
 const OWNER_ID = "";
 
 const app = express();
